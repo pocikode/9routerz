@@ -1,0 +1,194 @@
+name: build
+
+# Tag-only release: builds the portable 9routerz package for linux x64 + arm64
+# (no containers) and attaches the tarballs to the GitHub release.
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Each tarball is a self-contained server (custom-server.js + traced node_modules
+# + static assets) and runs on the matching CPU arch with Bun:
+#   tar -xzf 9routerz-0.1.0-linux-x64.tar.gz -C /srv/9routerz && cd /srv/9routerz
+#   cp .env.example .env   # set JWT_SECRET / INITIAL_PASSWORD / DATA_DIR
+#   bun custom-server.js
+#
+# Native deps (better-sqlite3, sharp) are installed on the build machine, so the
+# arch in the filename is the only arch the package runs on.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+# Never cancel a release build that is already publishing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    name: Build package (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout (with 9router submodule)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up Bun
+        id: bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Resolve build identity
+        id: build
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "submodule=$(git -C 9router rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Dependency versions come from the submodule (no lockfile upstream), so the
+      # install cache is keyed on its revision plus this repo's package.json.
+      - name: Cache bun downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.arch }}-${{ steps.bun.outputs.bun-version }}-${{ steps.build.outputs.submodule }}
+          restore-keys: |
+            bun-${{ runner.arch }}-${{ steps.bun.outputs.bun-version }}-
+
+      - name: Cache Next.js compiler output
+        uses: actions/cache@v6
+        with:
+          path: .work/9router/.next/cache
+          # Keyed on everything that changes the compiled output: the pinned
+          # submodule revision plus this repo's overlay and patches.
+          key: next-${{ runner.arch }}-${{ steps.build.outputs.submodule }}-${{ hashFiles('overlay/**', 'patches/**', '.env.example', 'package.json') }}
+          restore-keys: |
+            next-${{ runner.arch }}-${{ steps.build.outputs.submodule }}-
+            next-${{ runner.arch }}-
+
+      # sync.mjs materializes the build tree, applies the overlay + patches (and
+      # fails if an upstream anchor moved), then `bun install` + Next build.
+      - name: Build
+        run: |
+          set -euo pipefail
+          # Build-time values (NEXT_PUBLIC_*) are inlined into the client bundle;
+          # runtime secrets are not. A committed .env always wins.
+          if [[ ! -f .env ]]; then
+            cp .env.example .env
+            echo "No .env in repo — using .env.example for build-time values"
+          fi
+          bun run build
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          export PORT=20127
+          export DATA_DIR="$RUNNER_TEMP/9router-data"
+          export MODEL_CATALOG_SYNC=off
+          trap 'pkill -f "standalone/custom-server.js" 2>/dev/null || true' EXIT
+
+          bun run start &
+          pid=$!
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null; then
+              echo "health check passed on ${{ matrix.arch }}"
+              exit 0
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::server exited before becoming healthy"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::server did not answer /api/health within 120s"
+          exit 1
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          name="9routerz-${{ steps.build.outputs.version }}-linux-${{ matrix.arch }}"
+
+          mkdir -p dist
+          # Ship the env contract, never a local .env (it may hold real secrets).
+          cp .env.example .work/9router/.next/standalone/.env.example
+          tar \
+            --create --gzip \
+            --file "dist/${name}.tar.gz" \
+            --directory .work/9router/.next/standalone \
+            --exclude='./.env' \
+            --exclude='./.DS_Store' \
+            --exclude='._*' \
+            --owner=0 --group=0 --numeric-owner \
+            .
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "dist/${name}.tar.gz" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/${{ steps.package.outputs.name }}.tar.gz
+            dist/${{ steps.package.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        run: |
+          {
+            echo "### 9routerz package — linux-${{ matrix.arch }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| File | \`${{ steps.package.outputs.name }}.tar.gz\` |"
+            echo "| Size | ${{ steps.package.outputs.size }} |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo ""
+            echo "**Install**"
+            echo '```bash'
+            echo "tar -xzf ${{ steps.package.outputs.name }}.tar.gz -C /srv/9routerz"
+            echo "cd /srv/9routerz"
+            echo "cp .env.example .env   # set JWT_SECRET, INITIAL_PASSWORD, DATA_DIR"
+            echo "bun custom-server.js   # PORT defaults to 20127"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: 9routerz-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attach packages to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true
