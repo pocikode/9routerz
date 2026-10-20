@@ -1,0 +1,15 @@
+{
+  "name": "9routerz",
+  "version": "0.1.0",
+  "private": true,
+  "description": "9router with provider-clone support, applied as an overlay at build time. The 9router submodule stays pristine.",
+  "scripts": {
+    "sync": "bun scripts/sync.mjs",
+    "doctor": "bun scripts/doctor.mjs",
+    "dev": "bun scripts/sync.mjs && NEXT_DIST_DIR=.next-dev bun run --cwd .work/9router dev:bun",
+    "build": "bun scripts/sync.mjs && bun run --cwd .work/9router build:bun",
+    "start": "bun scripts/start.mjs",
+    "run": "bun scripts/start.mjs",
+    "clean": "rm -rf .work"
+  }
+}

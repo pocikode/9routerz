@@ -1,0 +1,14 @@
+node_modules/
+.work/
+/data
+.DS_Store
+*.log
+
+# Local environment — commit .env.example, never .env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# macOS resource forks (exFAT/external volumes)
+._*
