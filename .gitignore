@@ -3,6 +3,7 @@ node_modules/
 /data
 .DS_Store
 *.log
+!AGENTS.md
 
 # Local environment — commit .env.example, never .env
 .env

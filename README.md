@@ -219,6 +219,10 @@ provider's endpoint.
 
 ## Upgrading 9router
 
+The patches are pinned against **9router v0.5.104** — submodule commit
+`87a74e1bda3677193c6f71a7e2100c90311f0689` (`git -C 9router describe --tags` →
+`v0.5.104`). That commit is what `patches/registry.mjs` was verified against.
+
 ```bash
 git -C 9router fetch && git -C 9router checkout <new-tag>
 bun run doctor          # see which patches drifted

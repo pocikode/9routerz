@@ -1,0 +1,5 @@
+# The 9router/ submodule is a separate upstream project with its own
+# graphify run (9router/graphify-out/, 7888 nodes / 426 communities).
+# Indexing it here would duplicate ~1461 files and flatten that graph
+# into this one. Excluded deliberately — see graphify-out/GRAPH_REPORT.md.
+9router/
