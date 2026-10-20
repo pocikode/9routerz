@@ -29,10 +29,11 @@ lives outside and is materialized into a build tree at build time:
 │   ├── src/lib/providerClones.js              server registry (DB-backed)
 │   ├── src/shared/constants/providerClones.js client-safe resolver
 │   ├── src/app/api/provider-clones/…          REST API
-│   └── src/app/(dashboard)/…/CloneProviderModal.js
-├── patches/registry.mjs  104 exact-match codemods applied to upstream files
+│   └── src/app/(dashboard)/…/CloneProviderModal.js, MoveToCloneModal.js
+├── patches/registry.mjs  107 exact-match codemods applied to upstream files
 ├── scripts/sync.mjs      submodule → .work/9router + overlay + patches
 ├── scripts/doctor.mjs    dry-run every patch, report upstream drift
+├── scripts/check-clone-transfer.mjs  runnable check for the account-move path
 └── .work/9router         build tree (gitignored, disposable)
 ```
 
@@ -160,7 +161,7 @@ continue to live in the same table untouched.
 
 ### Patch surface
 
-104 codemods across 21 upstream files. Each is an exact string replacement with
+107 codemods across 23 upstream files. Each is an exact string replacement with
 an expected occurrence count; `sync.mjs` aborts loudly on a mismatch instead of
 producing a half-patched build, and `doctor.mjs` reports drift before you build.
 
@@ -181,11 +182,25 @@ producing a half-patched build, and `doctor.mjs` reports drift before you build.
 | Dashboard | `providers/page.js`, `providers/[id]/page.js`, `ModelSelectModal.js` |
 | Boot | `src/instrumentation.js` |
 
+`/v1/models` awaits `ensureCloneRegistry()` before resolving prefixes, so an
+account moved into a clone publishes under the clone prefix on the next request
+rather than after a restart.
+
 ## Clone semantics
 
 - **Starts empty.** A clone has its own account pool; add OAuth logins or API
   keys for it. The source's accounts are never duplicated (shared refresh tokens
   would rotate against each other).
+- **Accounts can be moved in.** On a provider's detail page, select one or more
+  connections and click **Move to Clone** to re-key them into any clone of that
+  provider (`POST /api/provider-clones/{cloneId}` with `{ connectionIds }`).
+  Credentials and health state are untouched — only the owning `provider` id and
+  the clone's routing metadata (`prefix`, `sourceProvider`, `baseUrl`,
+  `nodeName`) change — so the account immediately serves under the clone prefix.
+  A batch is all-or-nothing, and an account already present in the destination
+  pool (same email / ChatGPT account id / API-key name) is refused with 409
+  instead of creating two rows that rotate the same refresh token against each
+  other. Moving an account back is not offered: add it to the source again.
 - **Any registry provider is cloneable**, except entries with no transport
   (media-only) and `local-device`. Providers whose login uses a bespoke dashboard
   modal (Kiro, Cursor, Zed, Trae, Windsurf, GitLab, Xiaomi) are flagged
@@ -214,6 +229,11 @@ curl -s -X POST -H "x-9r-cli-token: $TOKEN" -H 'Content-Type: application/json' 
   localhost:20127/api/provider-clones
 
 # add an account to the clone (OAuth device flow, or an API key)
+# …or move one that already exists on the source provider:
+curl -s -X POST -H "x-9r-cli-token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"connectionIds":["<connection-id>"]}' \
+  localhost:20127/api/provider-clones/<clone-id>
+
 # then call it like any other provider:
 curl -s -X POST localhost:20127/v1/chat/completions \
   -H 'Content-Type: application/json' \

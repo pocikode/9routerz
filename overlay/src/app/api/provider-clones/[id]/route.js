@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import REGISTRY from "open-sse/providers/registry/index.js";
 import { getProviderNodes, getProviderConnections, updateProviderConnection, deleteProviderConnectionsByProvider } from "@/models";
-import { getProviderClone, updateProviderClone, deleteProviderClone, getTakenClonePrefixes } from "@/lib/providerClones";
+import { getProviderClone, updateProviderClone, deleteProviderClone, getTakenClonePrefixes, transferConnectionsToClone } from "@/lib/providerClones";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +87,22 @@ export async function PUT(request, { params }) {
   } catch (error) {
     console.log("Error updating provider clone:", error);
     return NextResponse.json({ error: "Failed to update provider clone" }, { status: 500 });
+  }
+}
+
+// POST /api/provider-clones/[id] - move accounts from the source provider into this clone
+export async function POST(request, { params }) {
+  try {
+    const { id } = await params;
+    const body = await request.json();
+    const result = await transferConnectionsToClone(id, body.connectionIds);
+    if (result.error) {
+      return NextResponse.json({ error: result.error }, { status: result.status || 400 });
+    }
+    return NextResponse.json(result);
+  } catch (error) {
+    console.log("Error transferring connections to provider clone:", error);
+    return NextResponse.json({ error: "Failed to transfer connections" }, { status: 500 });
   }
 }
 

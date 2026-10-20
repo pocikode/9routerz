@@ -10,7 +10,16 @@
 // in-memory map once at boot (instrumentation.js) and refreshed by the clone
 // API routes on every write. Reads never hit the DB on the hot path.
 
-import { getProviderNodes, getProviderNodeById, createProviderNode, updateProviderNode, deleteProviderNode } from "@/lib/localDb";
+import {
+  getProviderNodes,
+  getProviderNodeById,
+  createProviderNode,
+  updateProviderNode,
+  deleteProviderNode,
+  getProviderConnections,
+  updateProviderConnection,
+  reorderProviderConnections,
+} from "@/lib/localDb";
 import {
   PROVIDER_CLONE_PREFIX,
   PROVIDER_CLONE_TYPE,
@@ -132,6 +141,79 @@ export async function deleteProviderClone(id) {
   const removed = await deleteProviderNode(id);
   await primeCloneRegistry();
   return removed ? toCloneEntry(removed) : null;
+}
+
+// A moved account must not collide with one already in the clone's pool: two rows
+// sharing a refresh token rotate against each other and both go invalid.
+function accountKey(connection) {
+  const identity = connection.providerSpecificData?.chatgptAccountId
+    || connection.email
+    || connection.name
+    || "";
+  return identity ? `${connection.authType || "oauth"}:${identity}` : "";
+}
+
+/**
+ * Re-key connections from a clone's source provider into the clone's own pool.
+ * The clone's routing metadata (prefix/sourceProvider/baseUrl/nodeName) is
+ * seeded the same way POST /api/providers seeds it for a fresh clone connection.
+ */
+export async function transferConnectionsToClone(cloneId, connectionIds) {
+  const clone = await getProviderClone(cloneId);
+  if (!clone) return { error: "Provider clone not found", status: 404 };
+
+  const ids = [...new Set((Array.isArray(connectionIds) ? connectionIds : []).map(String))].filter(Boolean);
+  if (!ids.length) return { error: "No connections selected", status: 400 };
+
+  const sourceConnections = await getProviderConnections({ provider: clone.sourceProvider });
+  const byId = new Map(sourceConnections.map((c) => [c.id, c]));
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length) {
+    return {
+      error: `Connection(s) not found under ${clone.sourceProvider}: ${missing.join(", ")}`,
+      status: 404,
+    };
+  }
+
+  const pool = await getProviderConnections({ provider: cloneId });
+  const taken = new Set(pool.map(accountKey).filter(Boolean));
+  const conflicts = ids.filter((id) => taken.has(accountKey(byId.get(id))));
+  if (conflicts.length) {
+    const names = conflicts.map((id) => byId.get(id).name || byId.get(id).email || id);
+    return {
+      error: `Already in "${clone.name}": ${names.join(", ")}`,
+      status: 409,
+    };
+  }
+
+  let priority = pool.reduce((max, c) => Math.max(max, c.priority || 0), 0);
+  const moved = [];
+  for (const id of ids) {
+    const connection = byId.get(id);
+    priority += 1;
+    const updated = await updateProviderConnection(id, {
+      provider: cloneId,
+      priority,
+      providerSpecificData: {
+        ...(connection.providerSpecificData || {}),
+        prefix: clone.prefix,
+        sourceProvider: clone.sourceProvider,
+        // A clone with no baseUrl override keeps whatever the account already
+        // pointed at (ollama-local/xiaomi read this from the connection, not the
+        // registry) — the move must not silently re-point an account.
+        baseUrl: clone.baseUrl || connection.providerSpecificData?.baseUrl || "",
+        nodeName: clone.name,
+      },
+    });
+    if (updated) moved.push(id);
+  }
+
+  // Both pools keep contiguous priorities: the source because rows left it, the
+  // clone because that is the order its round-robin/fill-first reads.
+  await reorderProviderConnections(clone.sourceProvider);
+  await reorderProviderConnections(cloneId);
+
+  return { moved: moved.length, clone: toCloneEntry(clone) };
 }
 
 /**

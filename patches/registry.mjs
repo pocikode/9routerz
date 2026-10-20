@@ -723,7 +723,20 @@ ${CLONES_IMPORT}`,
     file: "src/app/api/v1/models/route.js",
     find: `import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";`,
     replace: `import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
+import { ensureCloneRegistry } from "@/lib/providerClones.js";
 ${CLONES_IMPORT}`,
+  },
+  {
+    id: "api/v1/models/route.js/ensure-registry",
+    file: "src/app/api/v1/models/route.js",
+    find: `  const skipDynamicFetch = options.skipDynamicFetch === true;
+  let connections = [];`,
+    replace: `  const skipDynamicFetch = options.skipDynamicFetch === true;
+  // Clones must be resolvable before resolveProviderSource() below decides which
+  // catalog to publish — an account moved into a clone must show up under the
+  // clone prefix on the very next request, not after the boot-time prime.
+  await ensureCloneRegistry();
+  let connections = [];`,
   },
   {
     id: "api/v1/models/route.js/static-alias",
@@ -1005,6 +1018,7 @@ import CloneProviderModal from "./components/CloneProviderModal";`,
     find: `import EditCompatibleNodeModal from "./EditCompatibleNodeModal";`,
     replace: `import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import EditProviderCloneModal from "./EditProviderCloneModal";
+import MoveToCloneModal from "./MoveToCloneModal";
 import { isProviderCloneId } from "@/shared/constants/providerClones.js";`,
   },
   {
@@ -1014,7 +1028,9 @@ import { isProviderCloneId } from "@/shared/constants/providerClones.js";`,
     replace: `  const [showEditNodeModal, setShowEditNodeModal] = useState(false);
   const [showEditCloneModal, setShowEditCloneModal] = useState(false);
   const [providerClone, setProviderClone] = useState(null);
-  const [cloneSourceInfo, setCloneSourceInfo] = useState(null);`,
+  const [cloneSourceInfo, setCloneSourceInfo] = useState(null);
+  const [showMoveToCloneModal, setShowMoveToCloneModal] = useState(false);
+  const [clonesOfSource, setClonesOfSource] = useState([]);`,
   },
   {
     id: "providers/[id]/page.js/provider-info",
@@ -1109,19 +1125,27 @@ import { isProviderCloneId } from "@/shared/constants/providerClones.js";`,
       }
 
       // Clones live in their own registry; resolve the source for display + models.
-      if (isProviderClone) {
-        try {
-          const cloneRes = await fetch("/api/provider-clones", { cache: "no-store" });
-          const cloneData = cloneRes.ok ? await cloneRes.json() : {};
-          const clone = (cloneData.clones || []).find((entry) => entry.id === providerId) || null;
-          setProviderClone(clone);
-          const source = clone
-            ? (cloneData.sources || []).find((entry) => entry.id === clone.sourceProvider)
-            : null;
-          setCloneSourceInfo(source || null);
-        } catch (error) {
-          console.log("Error fetching provider clone:", error);
-        }
+      // On a source provider the same list tells us which clones could receive
+      // an account (the "Move to clone" action).
+      try {
+        const cloneRes = await fetch("/api/provider-clones", { cache: "no-store" });
+        const cloneData = cloneRes.ok ? await cloneRes.json() : {};
+        const allClones = cloneData.clones || [];
+        const clone = isProviderClone
+          ? allClones.find((entry) => entry.id === providerId) || null
+          : null;
+        setProviderClone(clone);
+        const source = clone
+          ? (cloneData.sources || []).find((entry) => entry.id === clone.sourceProvider)
+          : null;
+        setCloneSourceInfo(source || null);
+        setClonesOfSource(
+          clone
+            ? []
+            : allClones.filter((entry) => entry.sourceProvider === providerId)
+        );
+      } catch (error) {
+        console.log("Error fetching provider clones:", error);
       }
     } catch (error) {
       console.log("Error fetching connections:", error);`,
@@ -1131,6 +1155,53 @@ import { isProviderCloneId } from "@/shared/constants/providerClones.js";`,
     file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
     find: `  }, [providerId, isCompatible]);`,
     replace: `  }, [providerId, isCompatible, isProviderClone]);`,
+  },
+  {
+    id: "providers/[id]/page.js/move-to-clone-button",
+    file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
+    find: `                      Delete Selected ({selectedConnectionIds.length})
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="sync"`,
+    replace: `                      Delete Selected ({selectedConnectionIds.length})
+                    </Button>
+                  )}
+                  {selectedConnectionIds.length > 0 && !isProviderClone && clonesOfSource.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="drive_file_move"
+                      onClick={() => setShowMoveToCloneModal(true)}
+                    >
+                      Move to Clone ({selectedConnectionIds.length})
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="sync"`,
+  },
+  {
+    id: "providers/[id]/page.js/move-to-clone-modal",
+    file: "src/app/(dashboard)/dashboard/providers/[id]/page.js",
+    find: `      <EditConnectionModal
+        isOpen={showEditModal}`,
+    replace: `      <MoveToCloneModal
+        isOpen={showMoveToCloneModal}
+        providerId={providerId}
+        connections={selectedConnections}
+        onMoved={async ({ moved }) => {
+          setSelectedConnectionIds([]);
+          await fetchConnections();
+          if (moved > 0) alert(\`Moved \${moved} account\${moved === 1 ? "" : "s"} to the cloned provider.\`);
+        }}
+        onClose={() => setShowMoveToCloneModal(false)}
+      />
+      <EditConnectionModal
+        isOpen={showEditModal}`,
   },
   {
     id: "providers/[id]/page.js/clone-card",
