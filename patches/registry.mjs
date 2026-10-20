@@ -640,6 +640,82 @@ ${CLONES_IMPORT}`,
       + '    }',
   },
   // ═══════════════════════════════════════════════════════════════════════════
+  // Per-provider overrides — clones inherit the source's custom headers
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    id: "api/providers/[id]/overrides/route.js/imports",
+    file: "src/app/api/providers/[id]/overrides/route.js",
+    find: `import { resolveProviderAlias } from "open-sse/services/model.js";`,
+    replace: `import { resolveProviderAlias } from "open-sse/services/model.js";
+import { getProviderClone } from "@/lib/providerClones";`,
+  },
+  {
+    id: "api/providers/[id]/overrides/route.js/get",
+    file: "src/app/api/providers/[id]/overrides/route.js",
+    find: `    const { id } = await params;
+    // URL may use an alias (gcli, cc…) — key everything by canonical registry id
+    const canonical = resolveProviderAlias(id);
+    const override = (await readOverrides())[canonical] || {};
+    // Built-in headers come straight from the registry transport — single source of
+    // truth, so the UI pre-fills exactly what this provider sends upstream.
+    return NextResponse.json({
+      headers: override.headers || {},
+      builtinHeaders: PROVIDERS[canonical]?.headers || {},
+    });`,
+    replace: `    const { id } = await params;
+    // URL may use an alias (gcli, cc…) — key everything by canonical registry id
+    const canonical = resolveProviderAlias(id);
+    const overrides = await readOverrides();
+    // A clone owns no registry transport, so its "built-in" set is the source
+    // provider's registry headers with the source's saved override layered on top:
+    // it sends exactly what the source sends until it saves an override of its own.
+    // Clones used to get an empty builtinHeaders here, which made the Custom Headers
+    // card render nothing at all. Diff-on-save then stores only the rows the clone
+    // actually changes, so unedited rows keep tracking the source.
+    const clone = await getProviderClone(canonical);
+    const sourceProvider = clone?.sourceProvider || canonical;
+    const builtinHeaders = clone
+      ? { ...(PROVIDERS[sourceProvider]?.headers || {}), ...(overrides[sourceProvider]?.headers || {}) }
+      : PROVIDERS[canonical]?.headers || {};
+    // Built-in headers come straight from the registry transport — single source of
+    // truth, so the UI pre-fills exactly what this provider sends upstream.
+    return NextResponse.json({
+      headers: overrides[canonical]?.headers || {},
+      builtinHeaders,
+    });`,
+  },
+  {
+    id: "sse/handlers/chat.js/imports",
+    file: "src/sse/handlers/chat.js",
+    find: `import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";`,
+    replace: `import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
+${CLONES_IMPORT}`,
+  },
+  {
+    id: "sse/handlers/chat.js/overrides-inherit",
+    file: "src/sse/handlers/chat.js",
+    find: `      // Per-provider user overrides (custom headers / connect timeout) from settings
+      providerOverrides: (chatSettings.providerOverrides || {})[provider] || null,`,
+    replace: `      // Per-provider user overrides (custom headers / connect timeout) from settings.
+      // A clone inherits the source provider's overrides and layers its own on top —
+      // the same merge the Custom Headers card shows for a clone (source first, clone
+      // wins per header). Non-clones read exactly their own entry, as before.
+      providerOverrides: (() => {
+        const all = chatSettings.providerOverrides || {};
+        const own = all[provider] || null;
+        const sourceId = resolveProviderSource(provider);
+        if (sourceId === provider) return own;
+        const inherited = all[sourceId] || null;
+        if (!inherited && !own) return null;
+        return {
+          ...(inherited || {}),
+          ...(own || {}),
+          headers: { ...(inherited?.headers || {}), ...(own?.headers || {}) },
+        };
+      })(),`,
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // /v1/models — clone serves the source catalog under its own prefix
   // ═══════════════════════════════════════════════════════════════════════════
   {

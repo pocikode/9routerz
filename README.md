@@ -30,7 +30,7 @@ lives outside and is materialized into a build tree at build time:
 │   ├── src/shared/constants/providerClones.js client-safe resolver
 │   ├── src/app/api/provider-clones/…          REST API
 │   └── src/app/(dashboard)/…/CloneProviderModal.js
-├── patches/registry.mjs  100 exact-match codemods applied to upstream files
+├── patches/registry.mjs  104 exact-match codemods applied to upstream files
 ├── scripts/sync.mjs      submodule → .work/9router + overlay + patches
 ├── scripts/doctor.mjs    dry-run every patch, report upstream drift
 └── .work/9router         build tree (gitignored, disposable)
@@ -160,7 +160,7 @@ continue to live in the same table untouched.
 
 ### Patch surface
 
-100 codemods across 18 upstream files. Each is an exact string replacement with
+104 codemods across 21 upstream files. Each is an exact string replacement with
 an expected occurrence count; `sync.mjs` aborts loudly on a mismatch instead of
 producing a half-patched build, and `doctor.mjs` reports drift before you build.
 
@@ -175,7 +175,8 @@ producing a half-patched build, and `doctor.mjs` reports drift before you build.
 | Prefix routing | `src/sse/services/model.js` |
 | Credential selection | `src/sse/services/auth.js` |
 | OAuth flows | `src/lib/oauth/providers/index.js`, `src/app/api/oauth/[provider]/[action]/route.js`, `src/shared/components/OAuthModal.js` |
-| Provider API | `src/app/api/providers/{route.js,validate, [id]/models, [id]/test}` |
+| Provider API | `src/app/api/providers/{route.js,validate, [id]/models, [id]/test, [id]/overrides}` |
+| Custom headers | `src/app/api/providers/[id]/overrides/route.js`, `src/sse/handlers/chat.js` |
 | Model catalog | `src/app/api/v1/models/route.js` |
 | Dashboard | `providers/page.js`, `providers/[id]/page.js`, `ModelSelectModal.js` |
 | Boot | `src/instrumentation.js` |
@@ -194,6 +195,11 @@ producing a half-patched build, and `doctor.mjs` reports drift before you build.
   ids/aliases, compatible-node prefixes, and other clones.
 - **Renaming a prefix** cascades into the clone's existing connections, so model
   routing updates atomically.
+- **Custom headers are inherited.** A clone sends the source provider's registry
+  headers plus the source's saved header overrides. The clone's Custom Headers
+  card shows that exact effective set; saving stores only the headers the clone
+  changes, so rows left untouched keep following the source when its config
+  changes. Clearing the clone's overrides drops it back to pure inheritance.
 - **Deleting a clone** removes its node and its connections only.
 
 ## Testing a clone

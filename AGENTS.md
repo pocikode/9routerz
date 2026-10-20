@@ -27,7 +27,7 @@ Notes: `dev` uses `.next-dev` and `build` uses `.next`, so they don't clobber ea
 - Client-safe resolver `overlay/src/shared/constants/providerClones.js` must stay free of `node:fs`/DB imports (bundled into browser + server). Server registry `overlay/src/lib/providerClones.js` holds an in-memory `Map`: primed at boot (`instrumentation.js` patch), every async entry point must `await ensureCloneRegistry()` before any sync lookup, every clone write re-primes.
 - Overlay files: `src/lib/providerClones.js`, `src/shared/constants/providerClones.js`, `src/app/api/provider-clones/**`, `CloneProviderModal.js`, `EditProviderCloneModal.js`.
 
-## Patch rules (`patches/registry.mjs`, currently 100 entries over 21 files)
+## Patch rules (`patches/registry.mjs`, currently 104 entries over 23 files)
 
 - Each entry is exact-string `find` + expected `count`; `sync` aborts naming file+snippet on mismatch instead of half-patching. Keep replacements minimal/additive, routing identity lookups through `resolveProviderSource`, never restructuring upstream.
 - After `git -C 9router fetch && git -C 9router checkout <tag>`: `bun run doctor`, fix drifted entries in `registry.mjs`, then `bun run build`.
