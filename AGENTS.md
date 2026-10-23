@@ -34,7 +34,7 @@ Notes: `dev` uses `.next-dev` and `build` uses `.next`, so they don't clobber ea
 
 ## Upstream context
 
-- Pinned submodule commit `87a74e1bda3677193c6f71a7e2100c90311f0689` (9router v0.5.104, 2026-10-15). Patch set targets this revision.
+- Pinned submodule commit `f39d8f07481ae8518e93175f0ecaaafa61573c6c` (9router v0.5.109, 2026-10-23). Patch set targets this revision.
 - Read `9router/CLAUDE.md` before touching gateway/registry/DB code, and `9router/open-sse/AGENTS.md` before touching anything under `open-sse/` or `src/sse/`. Upstream is plain JS ESM with `@/ → src/*`; its vitest suite lives in `9router/tests/` (independent package, baseline has known fails — see its CLAUDE.md, use `npx vitest run <file>` from `9router/tests/`).
 - Verify a clone end-to-end with the curl flow in `README.md` ("Testing a clone"); prefix rule `^[a-z0-9][a-z0-9._-]{0,31}$`, unique across built-in ids/aliases, compatible-node prefixes, and other clones.
 
